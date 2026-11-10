@@ -1,0 +1,7 @@
+project_id = "anderwallet"
+
+[functions.refresh-rates]
+verify_jwt = true
+
+[functions.check-recurring]
+verify_jwt = true
