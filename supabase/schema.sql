@@ -2,8 +2,10 @@
 -- Ejecuta este script en el SQL Editor de un proyecto Supabase nuevo. Volver a ejecutarlo no borra datos.
 --
 -- Cerraduras de la base, todas obligatorias:
--- 1. hook_before_user_created rechaza cualquier correo fuera de allowed_users antes de crear el usuario.
+-- 1. hook_before_user_created rechaza cualquier correo que no esté en public.allowed_users
+--    ni en luzmonitor.allowed_users (si ese esquema existe) antes de crear el usuario.
 --    Hay que activarlo en Authentication → Hooks (ver README).
+--    LuzMonitor vive en el esquema luzmonitor y no usa estas tablas.
 -- 2. is_allowed() exige que el correo esté autorizado y que la sesión haya pasado el segundo factor (aal2).
 -- 3. Todas las tablas tienen RLS. anon no tiene permisos. Sin is_allowed() no se lee ni se escribe nada.
 
@@ -48,13 +50,27 @@ set search_path = public
 as $$
 declare
   candidate text := lower(btrim(coalesce(event -> 'user' ->> 'email', '')));
+  allowed boolean := false;
 begin
-  if candidate <> '' and exists (select 1 from public.allowed_users where email = candidate) then
+  if candidate <> '' then
+    select exists (
+      select 1 from public.allowed_users where email = candidate
+    ) into allowed;
+
+    if not allowed and to_regclass('luzmonitor.allowed_users') is not null then
+      execute 'select exists (select 1 from luzmonitor.allowed_users where email = $1)'
+        into allowed
+        using candidate;
+    end if;
+  end if;
+
+  if allowed then
     return '{}'::jsonb;
   end if;
+
   return jsonb_build_object(
     'error',
-    jsonb_build_object('http_code', 403, 'message', 'Esta cuenta no tiene acceso a AnderWallet.')
+    jsonb_build_object('http_code', 403, 'message', 'Esta cuenta no tiene acceso.')
   );
 end;
 $$;

@@ -1,4 +1,5 @@
 import { adminClient, corsHeaders, isAllowedUser, isCron, json } from '../_shared/guard.ts'
+import { BCV_INTERMEDIATE } from './bcv-ca.ts'
 import { averageBinancePrice, BINANCE_BODY, parseBcv } from './parse.ts'
 
 type Key = 'bcv_usd' | 'bcv_eur' | 'binance_usdt'
@@ -37,13 +38,13 @@ Deno.serve(async (request) => {
 })
 
 async function fetchBcv(): Promise<{ usd: number | null; eur: number | null }> {
-  const caCert = Deno.env.get('BCV_CA_CERT')
-  const client = caCert ? Deno.createHttpClient({ caCerts: [caCert] }) : undefined
+  const extra = Deno.env.get('BCV_CA_CERT')
+  const client = Deno.createHttpClient({ caCerts: extra ? [BCV_INTERMEDIATE, extra] : [BCV_INTERMEDIATE] })
   try {
     const response = await fetch('https://www.bcv.org.ve/', {
       headers: { 'User-Agent': 'Mozilla/5.0 (AnderWallet)', Accept: 'text/html' },
       signal: AbortSignal.timeout(15_000),
-      ...(client ? { client } : {}),
+      client,
     } as RequestInit)
     if (!response.ok) throw new Error(`respondió ${response.status}`)
     return parseBcv(await response.text())

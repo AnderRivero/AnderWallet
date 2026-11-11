@@ -1,7 +1,10 @@
 project_id = "anderwallet"
 
+# La sesión se comprueba dentro de cada función (segundo factor y correo permitido, o el secreto del cron).
+# Si el gateway exige un JWT, el navegador falla en el preflight y el cron no puede entrar con la clave publishable.
+
 [functions.refresh-rates]
-verify_jwt = true
+verify_jwt = false
 
 [functions.check-recurring]
-verify_jwt = true
+verify_jwt = false
