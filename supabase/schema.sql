@@ -114,7 +114,7 @@ create table if not exists public.accounts (
   user_id uuid not null references auth.users (id) on delete cascade,
   name text not null check (char_length(btrim(name)) between 1 and 80),
   name_key text generated always as (lower(btrim(name))) stored,
-  kind text not null check (kind in ('bank', 'wallet', 'crypto')),
+  kind text not null check (kind in ('bank', 'wallet', 'crypto', 'cash')),
   currency text not null check (currency in ('USD', 'VES', 'EUR', 'USDT')),
   rate_source text not null default 'bcv' check (rate_source in ('bcv', 'binance', 'manual')),
   ref_currency text check (ref_currency is null or ref_currency in ('USD', 'VES', 'EUR', 'USDT')),
@@ -357,6 +357,10 @@ begin
   if not exists (select 1 from pg_constraint where conname = 'categories_unique_name') then
     alter table public.categories add constraint categories_unique_name unique (user_id, kind, name_key);
   end if;
+
+  alter table public.accounts drop constraint if exists accounts_kind_check;
+  alter table public.accounts
+    add constraint accounts_kind_check check (kind in ('bank', 'wallet', 'crypto', 'cash'));
 end $$;
 
 create unique index if not exists rate_snapshots_global_source

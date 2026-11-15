@@ -1,5 +1,5 @@
 export type Currency = 'USD' | 'VES' | 'EUR' | 'USDT'
-export type AccountKind = 'bank' | 'wallet' | 'crypto'
+export type AccountKind = 'bank' | 'wallet' | 'crypto' | 'cash'
 export type RateSource = 'bcv' | 'binance' | 'manual'
 export type RateKey = 'bcv_usd' | 'bcv_eur' | 'binance_usdt' | 'manual_usd'
 export type IconKind = 'lucide' | 'url' | 'brand'

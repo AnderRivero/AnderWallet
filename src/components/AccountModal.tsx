@@ -10,7 +10,12 @@ import { CurrencySelect, FormActions } from './fields'
 import { ColorPicker, IconPicker } from './IconPicker'
 import { Modal } from './Modal'
 
-const DEFAULT_ICON: Record<AccountKind, string> = { bank: 'Landmark', wallet: 'Wallet', crypto: 'Bitcoin' }
+const DEFAULT_ICON: Record<AccountKind, string> = {
+  bank: 'Landmark',
+  wallet: 'Wallet',
+  crypto: 'Bitcoin',
+  cash: 'Banknote',
+}
 
 export function AccountModal({ account, onClose }: { account: Account | null; onClose: () => void }) {
   const { movements, refresh } = useData()

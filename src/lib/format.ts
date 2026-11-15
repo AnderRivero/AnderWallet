@@ -42,6 +42,7 @@ export const ACCOUNT_KIND_LABEL: Record<AccountKind, string> = {
   bank: 'Banco',
   wallet: 'Billetera digital',
   crypto: 'Cripto',
+  cash: 'Efectivo',
 }
 
 export const CADENCE_LABEL: Record<Cadence, string> = {
