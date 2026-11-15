@@ -450,8 +450,21 @@ textarea {
   flex-wrap: wrap;
 }
 
-.section-follow {
-  margin-top: 28px;
+.debt-switch {
+  margin-bottom: 18px;
+}
+
+.debt-switch button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  white-space: normal;
+  line-height: 1.2;
+}
+
+.debt-switch button strong {
+  font-size: 0.95rem;
 }
 
 .stack {

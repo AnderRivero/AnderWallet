@@ -68,6 +68,7 @@ function DebtRow({
 
 export function ReceivablesPage() {
   const { accounts, movements, rates, receivables, refresh } = useData()
+  const [side, setSide] = useState<DebtKind>('receivable')
   const [editing, setEditing] = useState<{ item: Receivable | null; kind: DebtKind } | null>(null)
   const [collecting, setCollecting] = useState<Receivable | null>(null)
   const [showClosed, setShowClosed] = useState(false)
@@ -83,8 +84,8 @@ export function ReceivablesPage() {
     }))
     .filter((row) => showClosed || row.pending > 0)
     .sort((a, b) => (a.receivable.dueDate ?? '9999').localeCompare(b.receivable.dueDate ?? '9999'))
-  const owedToMe = rows.filter((row) => row.receivable.kind !== 'payable')
-  const iOwe = rows.filter((row) => row.receivable.kind === 'payable')
+  const paying = side === 'payable'
+  const visible = rows.filter((row) => (row.receivable.kind === 'payable') === paying)
 
   async function remove(receivable: Receivable) {
     const linked = movements.some((item) => item.receivableId === receivable.id)
@@ -105,14 +106,20 @@ export function ReceivablesPage() {
 
   return (
     <>
+      <div className="segmented debt-switch" role="tablist" aria-label="Tipo de deuda">
+        <button type="button" role="tab" aria-selected={!paying} className={paying ? '' : 'on'} onClick={() => setSide('receivable')}>
+          <span>Te deben</span>
+          <strong className="amount">{formatMoney(summary.receivablesUsd, 'USD')}</strong>
+        </button>
+        <button type="button" role="tab" aria-selected={paying} className={paying ? 'on' : ''} onClick={() => setSide('payable')}>
+          <span>Debes</span>
+          <strong className="amount">{formatMoney(summary.payablesUsd, 'USD')}</strong>
+        </button>
+      </div>
       <section className="section-head">
-        <div>
-          <p className="eyebrow">Te deben</p>
-          <h1>Por cobrar</h1>
-          <p className="lead amount">{formatMoney(summary.receivablesUsd, 'USD')}</p>
-        </div>
-        <button className="btn primary" type="button" onClick={() => setEditing({ item: null, kind: 'receivable' })}>
-          <Plus size={18} /> Nuevo préstamo
+        <h1>{paying ? 'Por pagar' : 'Por cobrar'}</h1>
+        <button className="btn primary" type="button" onClick={() => setEditing({ item: null, kind: side })}>
+          <Plus size={18} /> {paying ? 'Nueva deuda' : 'Nuevo préstamo'}
         </button>
       </section>
       <label className="check">
@@ -122,33 +129,8 @@ export function ReceivablesPage() {
       {error && <p className="error">{error}</p>}
 
       <section className="stack">
-        {owedToMe.length === 0 && <p className="note">Nadie te debe nada por ahora.</p>}
-        {owedToMe.map((row) => (
-          <DebtRow
-            key={row.receivable.id}
-            {...row}
-            today={today}
-            noAccounts={accounts.length === 0}
-            onSettle={setCollecting}
-            onEdit={(item) => setEditing({ item, kind: item.kind })}
-            onRemove={(item) => void remove(item)}
-          />
-        ))}
-      </section>
-
-      <section className="section-head section-follow">
-        <div>
-          <p className="eyebrow">Debes</p>
-          <h2>Por pagar</h2>
-          <p className="lead amount">{formatMoney(summary.payablesUsd, 'USD')}</p>
-        </div>
-        <button className="btn primary" type="button" onClick={() => setEditing({ item: null, kind: 'payable' })}>
-          <Plus size={18} /> Nueva deuda
-        </button>
-      </section>
-      <section className="stack">
-        {iOwe.length === 0 && <p className="note">No tienes deudas por pagar.</p>}
-        {iOwe.map((row) => (
+        {visible.length === 0 && <p className="note">{paying ? 'No tienes deudas por pagar.' : 'Nadie te debe nada por ahora.'}</p>}
+        {visible.map((row) => (
           <DebtRow
             key={row.receivable.id}
             {...row}
