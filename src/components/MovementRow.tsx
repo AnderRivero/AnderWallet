@@ -14,7 +14,7 @@ export function movementTitle(
     const name = context.accounts.find((item) => item.id === other?.accountId)?.name ?? 'otra cuenta'
     return movement.direction === -1 ? `A ${name}` : `Desde ${name}`
   }
-  if (movement.kind === 'loan_out' || movement.kind === 'collection') {
+  if (movement.kind === 'loan_out' || movement.kind === 'collection' || movement.kind === 'repayment') {
     const person = context.receivables.find((item) => item.id === movement.receivableId)?.person ?? ''
     return `${MOVEMENT_KIND_LABEL[movement.kind]} · ${person}`
   }

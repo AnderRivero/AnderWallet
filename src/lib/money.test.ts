@@ -69,6 +69,7 @@ describe('saldos y consolidado', () => {
   const accounts = [account('banco', 'VES', 'bcv'), account('zinli', 'USD'), account('binance', 'USDT', 'binance')]
   const receivable: Receivable = {
     id: 'deuda',
+    kind: 'receivable',
     person: 'Pedro',
     currency: 'USD',
     principal: 100,
@@ -101,8 +102,25 @@ describe('saldos y consolidado', () => {
     const result = totals(accounts, [receivable], movements, rates)
     expect(result.netUsd).toBeCloseTo(100 + 430 - 50)
     expect(result.receivablesUsd).toBeCloseTo(70)
+    expect(result.payablesUsd).toBe(0)
     expect(result.grossUsd).toBeCloseTo(550)
     expect(result.missingRates).toEqual([])
+  })
+
+  it('una deuda propia resta del bruto y baja al pagarla', () => {
+    const payable: Receivable = { ...receivable, id: 'debo', kind: 'payable', person: 'Ana', principal: 40 }
+    const paid = movement({
+      accountId: 'zinli',
+      kind: 'repayment',
+      direction: -1,
+      amount: 15,
+      receivableId: 'debo',
+      receivableAmount: 15,
+    })
+    expect(receivablePending(payable, [paid])).toBe(25)
+    const result = totals(accounts, [receivable, payable], [...movements, paid], rates)
+    expect(result.payablesUsd).toBeCloseTo(25)
+    expect(result.grossUsd).toBeCloseTo(550 - 15 - 25)
   })
 
   it('avisa qué cuenta quedó fuera por falta de tasa', () => {

@@ -450,6 +450,10 @@ textarea {
   flex-wrap: wrap;
 }
 
+.section-follow {
+  margin-top: 28px;
+}
+
 .stack {
   display: flex;
   flex-direction: column;

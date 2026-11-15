@@ -6,6 +6,7 @@ const KNOWN: Array<[RegExp, string]> = [
   [/movements_account_id_fkey/, 'Esa cuenta tiene movimientos. Bórralos o muévelos antes de eliminarla.'],
   [/movements_category_id_fkey/, 'Esa categoría tiene movimientos. Cámbialos antes de eliminarla.'],
   [/movements_one_loan/, 'Ese préstamo ya tiene su salida de una cuenta.'],
+  [/kind' column of 'receivables'|receivables_kind_check|movements_kind_check/, 'Falta actualizar la base. Ejecuta de nuevo supabase/schema.sql.'],
   [/_icon/, 'El icono no es válido. Una URL tiene que empezar con https://.'],
   [/row-level security|permission denied|No autorizado/i, 'La base rechazó la operación. Vuelve a entrar con tu cuenta y tu código.'],
   [/JWT expired|invalid JWT/i, 'La sesión venció. Vuelve a entrar.'],

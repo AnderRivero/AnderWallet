@@ -150,6 +150,7 @@ create table if not exists public.receivables (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
   person text not null check (char_length(btrim(person)) between 1 and 120),
+  kind text not null default 'receivable' check (kind in ('receivable', 'payable')),
   currency text not null check (currency in ('USD', 'VES', 'EUR', 'USDT')),
   principal numeric(20, 8) not null check (principal > 0),
   due_date date,
@@ -192,7 +193,7 @@ create table if not exists public.movements (
   account_id uuid not null references public.accounts (id) on delete restrict,
   category_id uuid references public.categories (id) on delete restrict,
   kind text not null check (
-    kind in ('opening', 'adjustment', 'income', 'expense', 'transfer', 'loan_out', 'collection')
+    kind in ('opening', 'adjustment', 'income', 'expense', 'transfer', 'loan_out', 'collection', 'repayment')
   ),
   direction smallint not null check (direction in (-1, 1)),
   amount numeric(20, 8) not null check (amount > 0),
@@ -208,12 +209,12 @@ create table if not exists public.movements (
   updated_at timestamptz not null default now(),
   constraint movements_direction check (
     (kind in ('income', 'collection') and direction = 1)
-    or (kind in ('expense', 'loan_out') and direction = -1)
+    or (kind in ('expense', 'loan_out', 'repayment') and direction = -1)
     or kind in ('opening', 'adjustment', 'transfer')
   ),
   constraint movements_category check (kind in ('income', 'expense') or category_id is null),
   constraint movements_transfer check ((kind = 'transfer') = (transfer_group is not null)),
-  constraint movements_receivable check ((kind in ('loan_out', 'collection')) = (receivable_id is not null)),
+  constraint movements_receivable check ((kind in ('loan_out', 'collection', 'repayment')) = (receivable_id is not null)),
   constraint movements_receivable_amount check ((receivable_id is null) = (receivable_amount is null)),
   constraint movements_recurring check (recurring_id is null or kind in ('income', 'expense'))
 );
@@ -363,6 +364,35 @@ begin
     add constraint accounts_kind_check check (kind in ('bank', 'wallet', 'crypto', 'cash'));
 end $$;
 
+alter table public.receivables add column if not exists kind text not null default 'receivable';
+
+do $$
+begin
+  alter table public.receivables drop constraint if exists receivables_kind_check;
+  alter table public.receivables
+    add constraint receivables_kind_check check (kind in ('receivable', 'payable'));
+
+  alter table public.movements drop constraint if exists movements_kind_check;
+  alter table public.movements
+    add constraint movements_kind_check check (
+      kind in ('opening', 'adjustment', 'income', 'expense', 'transfer', 'loan_out', 'collection', 'repayment')
+    );
+
+  alter table public.movements drop constraint if exists movements_direction;
+  alter table public.movements
+    add constraint movements_direction check (
+      (kind in ('income', 'collection') and direction = 1)
+      or (kind in ('expense', 'loan_out', 'repayment') and direction = -1)
+      or kind in ('opening', 'adjustment', 'transfer')
+    );
+
+  alter table public.movements drop constraint if exists movements_receivable;
+  alter table public.movements
+    add constraint movements_receivable check (
+      (kind in ('loan_out', 'collection', 'repayment')) = (receivable_id is not null)
+    );
+end $$;
+
 create unique index if not exists rate_snapshots_global_source
   on public.rate_snapshots (source) where user_id is null;
 create unique index if not exists rate_snapshots_user_source
@@ -426,6 +456,7 @@ set search_path = public
 as $$
 declare
   category_kind text;
+  debt_kind text;
   principal numeric;
   collected numeric;
 begin
@@ -470,22 +501,31 @@ begin
     end if;
   end if;
 
-  if new.kind = 'collection' then
-    select receivables.principal into principal
+  if new.kind in ('loan_out', 'collection', 'repayment') then
+    select receivables.principal, receivables.kind into principal, debt_kind
     from public.receivables
     where receivables.id = new.receivable_id
       and receivables.user_id = new.user_id
     for update;
 
-    select coalesce(sum(movements.receivable_amount), 0) into collected
-    from public.movements
-    where movements.receivable_id = new.receivable_id
-      and movements.user_id = new.user_id
-      and movements.kind = 'collection'
-      and movements.id is distinct from new.id;
+    if new.kind = 'repayment' and debt_kind is distinct from 'payable' then
+      raise exception 'Ese registro no es una deuda por pagar.';
+    end if;
+    if new.kind in ('loan_out', 'collection') and debt_kind is distinct from 'receivable' then
+      raise exception 'Ese registro no es un préstamo por cobrar.';
+    end if;
 
-    if collected + new.receivable_amount > principal + 0.00000001 then
-      raise exception 'El abono supera lo pendiente.';
+    if new.kind in ('collection', 'repayment') then
+      select coalesce(sum(movements.receivable_amount), 0) into collected
+      from public.movements
+      where movements.receivable_id = new.receivable_id
+        and movements.user_id = new.user_id
+        and movements.kind = new.kind
+        and movements.id is distinct from new.id;
+
+      if collected + new.receivable_amount > principal + 0.00000001 then
+        raise exception 'El abono supera lo pendiente.';
+      end if;
     end if;
   end if;
 
@@ -906,10 +946,11 @@ begin
   total := 0;
   for item in select value from jsonb_array_elements(payload -> 'receivables') loop
     insert into public.receivables (
-      id, person, currency, principal, due_date, notes, color, icon_kind, icon_value, written_off
+      id, kind, person, currency, principal, due_date, notes, color, icon_kind, icon_value, written_off
     )
     values (
-      (item ->> 'id')::uuid, item ->> 'person', item ->> 'currency', (item ->> 'principal')::numeric,
+      (item ->> 'id')::uuid, coalesce(nullif(item ->> 'kind', ''), 'receivable'),
+      item ->> 'person', item ->> 'currency', (item ->> 'principal')::numeric,
       nullif(item ->> 'dueDate', '')::date, nullif(item ->> 'notes', ''), item ->> 'color',
       item -> 'icon' ->> 'kind', item -> 'icon' ->> 'value', coalesce((item ->> 'writtenOff')::boolean, false)
     );

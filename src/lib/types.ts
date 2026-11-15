@@ -5,7 +5,8 @@ export type RateKey = 'bcv_usd' | 'bcv_eur' | 'binance_usdt' | 'manual_usd'
 export type IconKind = 'lucide' | 'url' | 'brand'
 export type FlowKind = 'income' | 'expense'
 export type Cadence = 'weekly' | 'monthly' | 'yearly'
-export type MovementKind = 'opening' | 'adjustment' | 'income' | 'expense' | 'transfer' | 'loan_out' | 'collection'
+export type MovementKind = 'opening' | 'adjustment' | 'income' | 'expense' | 'transfer' | 'loan_out' | 'collection' | 'repayment'
+export type DebtKind = 'receivable' | 'payable'
 
 export const CURRENCIES: Currency[] = ['USD', 'VES', 'EUR', 'USDT']
 
@@ -60,6 +61,7 @@ export type Movement = {
 
 export type Receivable = {
   id: string
+  kind: DebtKind
   person: string
   currency: Currency
   principal: number

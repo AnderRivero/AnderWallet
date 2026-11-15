@@ -73,7 +73,8 @@ export function HomePage() {
           <span>Bruto</span>
           <strong className="amount">{formatMoney(summary.grossUsd, 'USD')}</strong>
           <small>
-            Neto + <span className="amount">{formatMoney(summary.receivablesUsd, 'USD')}</span> por cobrar
+            Neto + <span className="amount">{formatMoney(summary.receivablesUsd, 'USD')}</span> por cobrar −{' '}
+            <span className="amount">{formatMoney(summary.payablesUsd, 'USD')}</span> por pagar
           </small>
         </article>
       </section>

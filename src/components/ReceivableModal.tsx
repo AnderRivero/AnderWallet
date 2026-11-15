@@ -1,15 +1,25 @@
 import { useState, type FormEvent } from 'react'
-import { createReceivable, saveMovement, updateReceivable } from '../lib/api'
+import { createPayable, createReceivable, saveMovement, updateReceivable } from '../lib/api'
 import { errorText } from '../lib/errors'
 import { todayISO } from '../lib/format'
 import { amountInput, crossRate, formatMoney, parseAmount, receivableCollected, receivablePending, usdPerUnit } from '../lib/money'
-import type { Currency, Icon, Receivable } from '../lib/types'
+import type { Currency, DebtKind, Icon, Receivable } from '../lib/types'
 import { useData } from '../data/DataProvider'
 import { AccountSelect, AmountField, CurrencySelect, FormActions } from './fields'
 import { ColorPicker, IconPicker } from './IconPicker'
 import { Modal } from './Modal'
 
-export function ReceivableModal({ receivable, onClose }: { receivable: Receivable | null; onClose: () => void }) {
+export function ReceivableModal({
+  receivable,
+  creating = 'receivable',
+  onClose,
+}: {
+  receivable: Receivable | null
+  creating?: DebtKind
+  onClose: () => void
+}) {
+  const debtKind = receivable?.kind ?? creating
+  const paying = debtKind === 'payable'
   const { accounts, movements, rates, refresh } = useData()
   const [person, setPerson] = useState(receivable?.person ?? '')
   const [currency, setCurrency] = useState<Currency>(receivable?.currency ?? 'USD')
@@ -17,7 +27,7 @@ export function ReceivableModal({ receivable, onClose }: { receivable: Receivabl
   const [dueDate, setDueDate] = useState(receivable?.dueDate ?? '')
   const [notes, setNotes] = useState(receivable?.notes ?? '')
   const [color, setColor] = useState(receivable?.color ?? '#22c55e')
-  const [icon, setIcon] = useState<Icon>(receivable?.icon ?? { kind: 'lucide', value: 'HandCoins' })
+  const [icon, setIcon] = useState<Icon>(receivable?.icon ?? { kind: 'lucide', value: paying ? 'Receipt' : 'HandCoins' })
   const [writtenOff, setWrittenOff] = useState(receivable?.writtenOff ?? false)
   const [fromAccount, setFromAccount] = useState(true)
   const [accountId, setAccountId] = useState(accounts.find((item) => item.currency === currency)?.id ?? accounts[0]?.id ?? '')
@@ -36,10 +46,19 @@ export function ReceivableModal({ receivable, onClose }: { receivable: Receivabl
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault()
-    if (!person.trim()) return setError('Escribe a quién le prestaste.')
+    if (!person.trim()) return setError(paying ? 'Escribe a quién le debes.' : 'Escribe a quién le prestaste.')
     if (parsedPrincipal == null || parsedPrincipal <= 0) return setError('Escribe un monto mayor que cero.')
+    if (receivable && currency !== receivable.currency && collected > 0) {
+      return setError(
+        paying
+          ? 'Ya registraste pagos en esta moneda. No se puede cambiar.'
+          : 'Ya registraste cobros en esta moneda. No se puede cambiar.',
+      )
+    }
     if (receivable && parsedPrincipal < collected) {
-      return setError(`Ya cobraste ${formatMoney(collected, receivable.currency)}. El monto no puede ser menor.`)
+      return setError(
+        `Ya ${paying ? 'pagaste' : 'cobraste'} ${formatMoney(collected, receivable.currency)}. El monto no puede ser menor.`,
+      )
     }
     const sent = parseAmount(shownAccountAmount)
     if (!receivable && fromAccount && (!account || sent == null || sent <= 0)) {
@@ -51,6 +70,7 @@ export function ReceivableModal({ receivable, onClose }: { receivable: Receivabl
       if (receivable) {
         await updateReceivable(receivable.id, {
           person,
+          currency,
           principal: parsedPrincipal,
           dueDate: dueDate || null,
           notes,
@@ -75,7 +95,17 @@ export function ReceivableModal({ receivable, onClose }: { receivable: Receivabl
           })
         }
       } else {
-        await createReceivable({
+        if (paying) {
+          await createPayable({
+            person,
+            currency,
+            principal: parsedPrincipal,
+            dueDate: dueDate || null,
+            notes,
+            color,
+            icon,
+          })
+        } else await createReceivable({
           person,
           currency,
           principal: parsedPrincipal,
@@ -98,19 +128,27 @@ export function ReceivableModal({ receivable, onClose }: { receivable: Receivabl
   }
 
   return (
-    <Modal title={receivable ? 'Editar por cobrar' : 'Nuevo préstamo'} subtitle="Lo que te deben suma al bruto, no al neto." onClose={onClose}>
+    <Modal
+      title={receivable ? (paying ? 'Editar por pagar' : 'Editar por cobrar') : paying ? 'Nueva deuda' : 'Nuevo préstamo'}
+      subtitle={
+        paying
+          ? 'El dinero sigue en tu cuenta. Se descuenta cuando lo pagas, y resta del bruto.'
+          : 'Lo que te deben suma al bruto, no al neto.'
+      }
+      onClose={onClose}
+    >
       <form className="form-grid" onSubmit={(event) => void onSubmit(event)}>
         <label className="field">
-          <span>Persona</span>
+          <span>{paying ? 'A quién le debes' : 'Persona'}</span>
           <input value={person} maxLength={120} onChange={(event) => setPerson(event.target.value)} autoFocus required />
         </label>
-        <CurrencySelect label="Moneda de la deuda" value={currency} disabled={Boolean(receivable)} onChange={setCurrency} />
+        <CurrencySelect label="Moneda de la deuda" value={currency} onChange={setCurrency} />
         <AmountField label={`Monto (${currency})`} value={principal} onChange={setPrincipal} />
         <label className="field">
-          <span>Fecha posible de cobro</span>
+          <span>{paying ? 'Fecha posible de pago' : 'Fecha posible de cobro'}</span>
           <input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
         </label>
-        {!receivable && (
+        {!receivable && !paying && (
           <>
             <label className="check full">
               <input type="checkbox" checked={fromAccount} onChange={(event) => setFromAccount(event.target.checked)} />
@@ -145,12 +183,12 @@ export function ReceivableModal({ receivable, onClose }: { receivable: Receivabl
         {receivable && (
           <>
             <p className="note full">
-              Cobrado {formatMoney(collected, receivable.currency)} · pendiente{' '}
-              {formatMoney(receivablePending({ ...receivable, writtenOff: false }, movements), receivable.currency)}
+              {paying ? 'Pagado' : 'Cobrado'} {formatMoney(collected, currency)} · pendiente{' '}
+              {formatMoney(receivablePending({ ...receivable, currency, writtenOff: false }, movements), currency)}
             </p>
             <label className="check full">
               <input type="checkbox" checked={writtenOff} onChange={(event) => setWrittenOff(event.target.checked)} />
-              Darlo por perdido (deja de sumar al bruto)
+              {paying ? 'Darla por condonada (deja de restar del bruto)' : 'Darlo por perdido (deja de sumar al bruto)'}
             </label>
           </>
         )}
@@ -163,6 +201,7 @@ export function ReceivableModal({ receivable, onClose }: { receivable: Receivabl
 
 export function CollectModal({ receivable, onClose }: { receivable: Receivable; onClose: () => void }) {
   const { accounts, movements, rates, refresh } = useData()
+  const paying = receivable.kind === 'payable'
   const pending = receivablePending(receivable, movements)
   const [accountId, setAccountId] = useState(
     accounts.find((item) => item.currency === receivable.currency)?.id ?? accounts[0]?.id ?? '',
@@ -184,21 +223,21 @@ export function CollectModal({ receivable, onClose }: { receivable: Receivable; 
   async function onSubmit(event: FormEvent) {
     event.preventDefault()
     const received = parseAmount(shown)
-    if (!account) return setError('Elige la cuenta donde entró.')
-    if (parsedDebt == null || parsedDebt <= 0) return setError('Escribe cuánto te pagaron.')
+    if (!account) return setError(paying ? 'Elige la cuenta de donde sale.' : 'Elige la cuenta donde entró.')
+    if (parsedDebt == null || parsedDebt <= 0) return setError(paying ? 'Escribe cuánto pagaste.' : 'Escribe cuánto te pagaron.')
     if (parsedDebt > pending + 0.000001) return setError(`Lo pendiente es ${formatMoney(pending, receivable.currency)}.`)
-    if (received == null || received <= 0) return setError('Escribe cuánto entró a la cuenta.')
+    if (received == null || received <= 0) return setError(paying ? 'Escribe cuánto salió de la cuenta.' : 'Escribe cuánto entró a la cuenta.')
     setSaving(true)
     setError(null)
     try {
       await saveMovement({
         accountId,
         categoryId: null,
-        kind: 'collection',
-        direction: 1,
+        kind: paying ? 'repayment' : 'collection',
+        direction: paying ? -1 : 1,
         amount: received,
         occurredOn,
-        note: note || `Cobro de ${receivable.person}`,
+        note: note || `${paying ? 'Pago a' : 'Cobro de'} ${receivable.person}`,
         usdRate: usdPerUnit(account.currency, account.rateSource, rates),
         receivableId: receivable.id,
         receivableAmount: parsedDebt,
@@ -213,15 +252,15 @@ export function CollectModal({ receivable, onClose }: { receivable: Receivable; 
 
   return (
     <Modal
-      title={`Cobro de ${receivable.person}`}
+      title={`${paying ? 'Pago a' : 'Cobro de'} ${receivable.person}`}
       subtitle={`Pendiente: ${formatMoney(pending, receivable.currency)}`}
       onClose={onClose}
     >
       <form className="form-grid" onSubmit={(event) => void onSubmit(event)}>
         <AmountField label={`Abono a la deuda (${receivable.currency})`} value={debtAmount} onChange={setDebtAmount} />
-        <AccountSelect accounts={accounts} value={accountId} onChange={setAccountId} label="Entró a" />
+        <AccountSelect accounts={accounts} value={accountId} onChange={setAccountId} label={paying ? 'Salió de' : 'Entró a'} />
         <AmountField
-          label={account ? `Entró (${account.currency})` : 'Entró'}
+          label={account ? `${paying ? 'Salió' : 'Entró'} (${account.currency})` : paying ? 'Salió' : 'Entró'}
           value={shown}
           onChange={(value) => {
             setAccountDirty(true)
@@ -238,7 +277,7 @@ export function CollectModal({ receivable, onClose }: { receivable: Receivable; 
           <input value={note} maxLength={2000} onChange={(event) => setNote(event.target.value)} />
         </label>
         {error && <p className="error full">{error}</p>}
-        <FormActions pending={saving} onClose={onClose} label="Registrar cobro" />
+        <FormActions pending={saving} onClose={onClose} label={paying ? 'Registrar pago' : 'Registrar cobro'} />
       </form>
     </Modal>
   )

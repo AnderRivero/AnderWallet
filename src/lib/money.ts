@@ -45,18 +45,20 @@ export function accountBalance(accountId: string, movements: Movement[]): number
   )
 }
 
+function settlementKind(receivable: Receivable): 'collection' | 'repayment' {
+  return receivable.kind === 'payable' ? 'repayment' : 'collection'
+}
+
 export function receivablePending(receivable: Receivable, movements: Movement[]): number {
   if (receivable.writtenOff) return 0
-  const collected = movements
-    .filter((movement) => movement.receivableId === receivable.id && movement.kind === 'collection')
-    .reduce((sum, movement) => sum + (movement.receivableAmount ?? 0), 0)
-  return Math.max(0, round(receivable.principal - collected))
+  return Math.max(0, round(receivable.principal - receivableCollected(receivable, movements)))
 }
 
 export function receivableCollected(receivable: Receivable, movements: Movement[]): number {
+  const kind = settlementKind(receivable)
   return round(
     movements
-      .filter((movement) => movement.receivableId === receivable.id && movement.kind === 'collection')
+      .filter((movement) => movement.receivableId === receivable.id && movement.kind === kind)
       .reduce((sum, movement) => sum + (movement.receivableAmount ?? 0), 0),
   )
 }
@@ -69,6 +71,7 @@ export function sourceForCurrency(currency: Currency, accounts: Account[]): Rate
 export type Totals = {
   netUsd: number
   receivablesUsd: number
+  payablesUsd: number
   grossUsd: number
   missingRates: string[]
 }
@@ -87,6 +90,7 @@ export function totals(accounts: Account[], receivables: Receivable[], movements
     netUsd += balance * factor
   }
   let receivablesUsd = 0
+  let payablesUsd = 0
   for (const receivable of receivables) {
     const pending = receivablePending(receivable, movements)
     if (pending === 0) continue
@@ -95,12 +99,14 @@ export function totals(accounts: Account[], receivables: Receivable[], movements
       missing.push(receivable.person)
       continue
     }
-    receivablesUsd += pending * factor
+    if (receivable.kind === 'payable') payablesUsd += pending * factor
+    else receivablesUsd += pending * factor
   }
   return {
     netUsd: round(netUsd),
     receivablesUsd: round(receivablesUsd),
-    grossUsd: round(netUsd + receivablesUsd),
+    payablesUsd: round(payablesUsd),
+    grossUsd: round(netUsd + receivablesUsd - payablesUsd),
     missingRates: missing,
   }
 }

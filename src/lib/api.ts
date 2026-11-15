@@ -118,6 +118,7 @@ export async function loadAll(): Promise<Snapshot> {
     })),
     receivables: (receivables.data as Row[]).map((row) => ({
       id: str(row.id),
+      kind: row.kind === 'payable' ? 'payable' : 'receivable',
       person: str(row.person),
       currency: row.currency as Currency,
       principal: num(row.principal),
@@ -202,7 +203,7 @@ export type MovementInput = {
   id?: string
   accountId: string
   categoryId: string | null
-  kind: 'opening' | 'adjustment' | 'income' | 'expense' | 'loan_out' | 'collection'
+  kind: 'opening' | 'adjustment' | 'income' | 'expense' | 'loan_out' | 'collection' | 'repayment'
   direction: 1 | -1
   amount: number
   occurredOn: string
@@ -296,12 +297,36 @@ export async function createReceivable(input: {
   if (error) throw error
 }
 
+export async function createPayable(input: {
+  person: string
+  currency: Currency
+  principal: number
+  dueDate: string | null
+  notes: string | null
+  color: string
+  icon: Icon
+}): Promise<void> {
+  const { error } = await db().from('receivables').insert({
+    kind: 'payable',
+    person: input.person.trim(),
+    currency: input.currency,
+    principal: input.principal,
+    due_date: input.dueDate,
+    notes: emptyToNull(input.notes),
+    color: input.color,
+    icon_kind: input.icon.kind,
+    icon_value: input.icon.value,
+  })
+  if (error) throw error
+}
+
 export async function updateReceivable(
   id: string,
-  input: Pick<Receivable, 'person' | 'principal' | 'dueDate' | 'notes' | 'color' | 'icon' | 'writtenOff'>,
+  input: Pick<Receivable, 'person' | 'currency' | 'principal' | 'dueDate' | 'notes' | 'color' | 'icon' | 'writtenOff'>,
 ): Promise<void> {
   await upsert('receivables', id, {
     person: input.person.trim(),
+    currency: input.currency,
     principal: input.principal,
     due_date: input.dueDate,
     notes: emptyToNull(input.notes),

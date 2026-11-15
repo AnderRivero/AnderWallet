@@ -59,4 +59,5 @@ export const MOVEMENT_KIND_LABEL: Record<MovementKind, string> = {
   transfer: 'Transferencia',
   loan_out: 'Préstamo',
   collection: 'Cobro',
+  repayment: 'Pago de deuda',
 }

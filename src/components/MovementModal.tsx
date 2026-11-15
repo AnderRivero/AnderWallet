@@ -41,13 +41,14 @@ export function MovementModal({
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
 
-  const linked = kind === 'loan_out' || kind === 'collection'
+  const linked = kind === 'loan_out' || kind === 'collection' || kind === 'repayment'
   const receivable = receivables.find((item) => item.id === movement?.receivableId)
   const account = accounts.find((item) => item.id === accountId)
   const parsed = parseAmount(amount)
   const factor = account ? usdPerUnit(account.currency, account.rateSource, rates) : null
   const signedChoice = kind === 'opening' || kind === 'adjustment'
-  const direction: 1 | -1 = kind === 'income' || kind === 'collection' ? 1 : kind === 'expense' || kind === 'loan_out' ? -1 : negative ? -1 : 1
+  const direction: 1 | -1 =
+    kind === 'income' || kind === 'collection' ? 1 : kind === 'expense' || kind === 'loan_out' || kind === 'repayment' ? -1 : negative ? -1 : 1
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault()
@@ -111,7 +112,7 @@ export function MovementModal({
         )}
         {linked && receivable && (
           <p className="note full">
-            {kind === 'loan_out' ? 'Préstamo a' : 'Cobro de'} {receivable.person}
+            {kind === 'loan_out' ? 'Préstamo a' : kind === 'repayment' ? 'Pago a' : 'Cobro de'} {receivable.person}
           </p>
         )}
         <AccountSelect accounts={accounts} value={accountId} onChange={setAccountId} />
