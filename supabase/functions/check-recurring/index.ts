@@ -5,7 +5,16 @@ const DEFAULT_FROM = 'AnderWallet <onboarding@resend.dev>'
 const DEFAULT_APP_URL = 'https://anderrivero.github.io/AnderWallet/#/pagos-fijos'
 const SYMBOL: Record<string, string> = { USD: '$', VES: 'Bs.', EUR: '€', USDT: '₮' }
 
-type Due = { id: string; name: string; kind: string; amount: number; currency: string; dueDate: string; daysLeft: number }
+type Due = {
+  id: string
+  userId: string
+  name: string
+  kind: string
+  amount: number
+  currency: string
+  dueDate: string
+  daysLeft: number
+}
 
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders(request) })
@@ -17,7 +26,7 @@ Deno.serve(async (request) => {
 
   const { data: rows, error } = await admin
     .from('recurring')
-    .select('id, name, kind, amount, currency, cadence, anchor_date, paid_count, lead_days')
+    .select('id, user_id, name, kind, amount, currency, cadence, anchor_date, paid_count, lead_days')
     .eq('active', true)
   if (error) return json(request, { error: error.message }, 500)
 
@@ -36,6 +45,7 @@ Deno.serve(async (request) => {
     if (state.status === 'later') continue
     due.push({
       id: String(row.id),
+      userId: String(row.user_id),
       name: String(row.name),
       kind: String(row.kind),
       amount: Number(row.amount),
@@ -62,24 +72,46 @@ Deno.serve(async (request) => {
   const pending = due.filter((item) => claimed.has(`${item.id}|${item.dueDate}`))
   if (pending.length === 0) return json(request, { sent: false, count: 0 })
 
-  const to = Deno.env.get('ALERT_EMAIL') ?? (await firstAllowedEmail(admin))
-  if (!to) return json(request, { error: 'No hay a quién escribir.' }, 500)
-
-  const sent = await sendEmail(resendKey, to, emailFor(pending, Deno.env.get('APP_URL') ?? DEFAULT_APP_URL))
-  if (!sent.ok) {
-    for (const item of pending) {
-      await admin.from('alert_notices').delete().eq('recurring_id', item.id).eq('due_date', item.dueDate)
-    }
-    return json(request, { error: sent.error }, 502)
+  const byUser = new Map<string, Due[]>()
+  for (const item of pending) {
+    const list = byUser.get(item.userId) ?? []
+    list.push(item)
+    byUser.set(item.userId, list)
   }
 
-  console.log(`Correo de pagos fijos enviado (${pending.length}).`)
-  return json(request, { sent: true, count: pending.length })
+  const failures: string[] = []
+  let sentCount = 0
+  for (const [userId, items] of byUser) {
+    const to = await emailOf(admin, userId)
+    if (!to) {
+      await release(admin, items)
+      failures.push('No se encontró el correo de una persona.')
+      continue
+    }
+    const sent = await sendEmail(resendKey, to, emailFor(items, Deno.env.get('APP_URL') ?? DEFAULT_APP_URL))
+    if (!sent.ok) {
+      await release(admin, items)
+      failures.push(sent.error)
+      continue
+    }
+    sentCount += items.length
+  }
+
+  if (sentCount === 0) return json(request, { sent: false, count: 0, errors: failures }, failures.length ? 502 : 200)
+  console.log(`Correos de pagos fijos enviados (${sentCount}).`)
+  return json(request, { sent: true, count: sentCount, errors: failures })
 })
 
-async function firstAllowedEmail(admin: NonNullable<ReturnType<typeof adminClient>>): Promise<string | null> {
-  const { data } = await admin.from('allowed_users').select('email').order('email').limit(1).maybeSingle()
-  return data?.email ? String(data.email) : null
+async function emailOf(admin: NonNullable<ReturnType<typeof adminClient>>, userId: string): Promise<string | null> {
+  const { data, error } = await admin.auth.admin.getUserById(userId)
+  if (error || !data.user?.email) return null
+  return data.user.email.toLowerCase()
+}
+
+async function release(admin: NonNullable<ReturnType<typeof adminClient>>, items: Due[]): Promise<void> {
+  for (const item of items) {
+    await admin.from('alert_notices').delete().eq('recurring_id', item.id).eq('due_date', item.dueDate)
+  }
 }
 
 function money(amount: number, currency: string): string {

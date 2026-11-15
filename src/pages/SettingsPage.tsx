@@ -90,8 +90,8 @@ export function SettingsPage() {
         <p className="note">
           No se hace desde aquí, a propósito. En Supabase, SQL Editor:{' '}
           <code>insert into public.allowed_users (email) values (&apos;correo@gmail.com&apos;);</code> Si la pantalla de
-          consentimiento de Google sigue en prueba, agrega también ese correo como usuario de prueba. Esa persona tendrá que
-          activar su propio autenticador y verá los mismos datos que tú.
+          consentimiento de Google sigue en prueba, agrega también ese correo como usuario de prueba. Esa persona activa su
+          propio autenticador y entra a una libreta vacía: no ve tus cuentas ni tus movimientos.
         </p>
       </section>
 

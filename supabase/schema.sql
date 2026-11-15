@@ -1,5 +1,6 @@
 -- AnderWallet
--- Ejecuta este script en el SQL Editor de un proyecto Supabase nuevo. Volver a ejecutarlo no borra datos.
+-- Ejecuta este script en el SQL Editor. Volver a ejecutarlo no borra datos.
+-- Si la base ya tenía la libreta compartida, asigna esas filas a rivero.ander@gmail.com.
 --
 -- Cerraduras de la base, todas obligatorias:
 -- 1. hook_before_user_created rechaza cualquier correo que no esté en public.allowed_users
@@ -7,7 +8,8 @@
 --    Hay que activarlo en Authentication → Hooks (ver README).
 --    LuzMonitor vive en el esquema luzmonitor y no usa estas tablas.
 -- 2. is_allowed() exige que el correo esté autorizado y que la sesión haya pasado el segundo factor (aal2).
--- 3. Todas las tablas tienen RLS. anon no tiene permisos. Sin is_allowed() no se lee ni se escribe nada.
+-- 3. Cada libreta es de una persona: además de is_allowed(), las filas exigen user_id = auth.uid().
+--    anon no tiene permisos.
 
 create extension if not exists pgcrypto;
 
@@ -98,16 +100,20 @@ $$;
 -- Tablas ------------------------------------------------------------------
 
 create table if not exists public.rate_snapshots (
-  source text primary key check (source in ('bcv_usd', 'bcv_eur', 'binance_usdt', 'manual_usd')),
+  id uuid primary key default gen_random_uuid(),
+  source text not null check (source in ('bcv_usd', 'bcv_eur', 'binance_usdt', 'manual_usd')),
+  user_id uuid references auth.users (id) on delete cascade,
   ves_per_unit numeric(20, 8) check (ves_per_unit is null or ves_per_unit > 0),
   fetched_at timestamptz,
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint rate_snapshots_owner check ((source = 'manual_usd') = (user_id is not null))
 );
 
 create table if not exists public.accounts (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
   name text not null check (char_length(btrim(name)) between 1 and 80),
-  name_key text generated always as (lower(btrim(name))) stored unique,
+  name_key text generated always as (lower(btrim(name))) stored,
   kind text not null check (kind in ('bank', 'wallet', 'crypto')),
   currency text not null check (currency in ('USD', 'VES', 'EUR', 'USDT')),
   rate_source text not null default 'bcv' check (rate_source in ('bcv', 'binance', 'manual')),
@@ -122,11 +128,13 @@ create table if not exists public.accounts (
   updated_at timestamptz not null default now(),
   constraint accounts_ref_differs check (ref_currency is null or ref_currency <> currency),
   constraint accounts_crypto_usdt check (kind <> 'crypto' or currency = 'USDT'),
-  constraint accounts_icon check (public.valid_icon(icon_kind, icon_value))
+  constraint accounts_icon check (public.valid_icon(icon_kind, icon_value)),
+  constraint accounts_name_key unique (user_id, name_key)
 );
 
 create table if not exists public.categories (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
   name text not null check (char_length(btrim(name)) between 1 and 80),
   name_key text generated always as (lower(btrim(name))) stored,
   kind text not null check (kind in ('income', 'expense')),
@@ -134,12 +142,13 @@ create table if not exists public.categories (
   icon_kind text not null default 'lucide',
   icon_value text not null default 'Tag',
   created_at timestamptz not null default now(),
-  constraint categories_unique_name unique (kind, name_key),
+  constraint categories_unique_name unique (user_id, kind, name_key),
   constraint categories_icon check (public.valid_icon(icon_kind, icon_value))
 );
 
 create table if not exists public.receivables (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
   person text not null check (char_length(btrim(person)) between 1 and 120),
   currency text not null check (currency in ('USD', 'VES', 'EUR', 'USDT')),
   principal numeric(20, 8) not null check (principal > 0),
@@ -156,6 +165,7 @@ create table if not exists public.receivables (
 
 create table if not exists public.recurring (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
   name text not null check (char_length(btrim(name)) between 1 and 80),
   kind text not null check (kind in ('income', 'expense')),
   amount numeric(20, 8) not null check (amount > 0),
@@ -178,6 +188,7 @@ create table if not exists public.recurring (
 
 create table if not exists public.movements (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
   account_id uuid not null references public.accounts (id) on delete restrict,
   category_id uuid references public.categories (id) on delete restrict,
   kind text not null check (
@@ -221,6 +232,138 @@ create table if not exists public.alert_notices (
   primary key (recurring_id, due_date)
 );
 
+create table if not exists public.profiles (
+  user_id uuid primary key references auth.users (id) on delete cascade,
+  seeded_at timestamptz
+);
+
+-- Libreta por persona. En una base ya usada, las filas existentes pasan al dueño. --
+
+alter table public.accounts add column if not exists user_id uuid;
+alter table public.categories add column if not exists user_id uuid;
+alter table public.receivables add column if not exists user_id uuid;
+alter table public.recurring add column if not exists user_id uuid;
+alter table public.movements add column if not exists user_id uuid;
+alter table public.rate_snapshots add column if not exists id uuid default gen_random_uuid();
+alter table public.rate_snapshots add column if not exists user_id uuid;
+
+update public.rate_snapshots set id = gen_random_uuid() where id is null;
+alter table public.rate_snapshots alter column id set not null;
+
+do $$
+begin
+  if exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.rate_snapshots'::regclass
+      and contype = 'p'
+      and pg_get_constraintdef(oid) like '%source%'
+  ) then
+    alter table public.rate_snapshots drop constraint rate_snapshots_pkey;
+    alter table public.rate_snapshots add primary key (id);
+  end if;
+end $$;
+
+do $$
+declare
+  owner uuid;
+begin
+  select users.id into owner
+  from auth.users as users
+  where lower(users.email) = 'rivero.ander@gmail.com'
+  limit 1;
+
+  if owner is null and (
+    exists (select 1 from public.accounts where user_id is null)
+    or exists (select 1 from public.categories where user_id is null)
+    or exists (select 1 from public.receivables where user_id is null)
+    or exists (select 1 from public.recurring where user_id is null)
+    or exists (select 1 from public.movements where user_id is null)
+    or exists (select 1 from public.rate_snapshots where source = 'manual_usd' and user_id is null)
+  ) then
+    raise exception 'Entra una vez a AnderWallet con rivero.ander@gmail.com antes de migrar.';
+  end if;
+
+  if owner is null then
+    return;
+  end if;
+
+  update public.accounts set user_id = owner where user_id is null;
+  update public.categories set user_id = owner where user_id is null;
+  update public.receivables set user_id = owner where user_id is null;
+  update public.recurring set user_id = owner where user_id is null;
+  update public.movements set user_id = owner where user_id is null;
+  update public.rate_snapshots set user_id = owner where source = 'manual_usd' and user_id is null;
+
+  insert into public.profiles (user_id, seeded_at)
+  select owner, now()
+  where exists (select 1 from public.categories where user_id = owner)
+  on conflict (user_id) do nothing;
+end $$;
+
+-- El update de movements deja pendiente el trigger diferido de transferencias.
+-- Hay que ejecutarlo antes de alterar la tabla.
+set constraints all immediate;
+
+alter table public.accounts alter column user_id set not null;
+alter table public.categories alter column user_id set not null;
+alter table public.receivables alter column user_id set not null;
+alter table public.recurring alter column user_id set not null;
+alter table public.movements alter column user_id set not null;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'accounts_user_id_fkey') then
+    alter table public.accounts
+      add constraint accounts_user_id_fkey foreign key (user_id) references auth.users (id) on delete cascade;
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'categories_user_id_fkey') then
+    alter table public.categories
+      add constraint categories_user_id_fkey foreign key (user_id) references auth.users (id) on delete cascade;
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'receivables_user_id_fkey') then
+    alter table public.receivables
+      add constraint receivables_user_id_fkey foreign key (user_id) references auth.users (id) on delete cascade;
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'recurring_user_id_fkey') then
+    alter table public.recurring
+      add constraint recurring_user_id_fkey foreign key (user_id) references auth.users (id) on delete cascade;
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'movements_user_id_fkey') then
+    alter table public.movements
+      add constraint movements_user_id_fkey foreign key (user_id) references auth.users (id) on delete cascade;
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'rate_snapshots_user_id_fkey') then
+    alter table public.rate_snapshots
+      add constraint rate_snapshots_user_id_fkey foreign key (user_id) references auth.users (id) on delete cascade;
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'rate_snapshots_owner') then
+    alter table public.rate_snapshots
+      add constraint rate_snapshots_owner check ((source = 'manual_usd') = (user_id is not null));
+  end if;
+
+  alter table public.accounts drop constraint if exists accounts_name_key_key;
+  if not exists (select 1 from pg_constraint where conname = 'accounts_name_key') then
+    alter table public.accounts add constraint accounts_name_key unique (user_id, name_key);
+  end if;
+
+  if exists (
+    select 1 from pg_constraint
+    where conname = 'categories_unique_name'
+      and pg_get_constraintdef(oid) not like '%user_id%'
+  ) then
+    alter table public.categories drop constraint categories_unique_name;
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'categories_unique_name') then
+    alter table public.categories add constraint categories_unique_name unique (user_id, kind, name_key);
+  end if;
+end $$;
+
+create unique index if not exists rate_snapshots_global_source
+  on public.rate_snapshots (source) where user_id is null;
+create unique index if not exists rate_snapshots_user_source
+  on public.rate_snapshots (user_id, source) where user_id is not null;
+
 -- Reglas ------------------------------------------------------------------
 
 create or replace function public.touch_updated()
@@ -252,6 +395,26 @@ begin
 end;
 $$;
 
+create or replace function public.assign_owner()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    return new;
+  end if;
+  if tg_op = 'INSERT' then
+    new.user_id := auth.uid();
+    return new;
+  end if;
+  if new.user_id is distinct from old.user_id then
+    raise exception 'No puedes cambiar el dueño.';
+  end if;
+  return new;
+end;
+$$;
+
 create or replace function public.guard_movement()
 returns trigger
 language plpgsql
@@ -265,13 +428,39 @@ begin
   new.note := nullif(btrim(coalesce(new.note, '')), '');
   new.updated_at := now();
 
+  if not exists (
+    select 1 from public.accounts where id = new.account_id and user_id = new.user_id
+  ) then
+    raise exception 'La cuenta no es tuya.';
+  end if;
+
+  if new.category_id is not null and not exists (
+    select 1 from public.categories where id = new.category_id and user_id = new.user_id
+  ) then
+    raise exception 'La categoría no es tuya.';
+  end if;
+
+  if new.receivable_id is not null and not exists (
+    select 1 from public.receivables where id = new.receivable_id and user_id = new.user_id
+  ) then
+    raise exception 'El préstamo no es tuyo.';
+  end if;
+
+  if new.recurring_id is not null and not exists (
+    select 1 from public.recurring where id = new.recurring_id and user_id = new.user_id
+  ) then
+    raise exception 'El pago fijo no es tuyo.';
+  end if;
+
   if current_setting('anderwallet.restoring', true) is distinct from 'on'
     and new.occurred_on > public.caracas_today() + 1 then
     raise exception 'La fecha no puede estar en el futuro.';
   end if;
 
   if new.category_id is not null then
-    select kind into category_kind from public.categories where id = new.category_id;
+    select kind into category_kind
+    from public.categories
+    where id = new.category_id and user_id = new.user_id;
     if category_kind is distinct from new.kind then
       raise exception 'La categoría no corresponde al tipo de movimiento.';
     end if;
@@ -281,11 +470,13 @@ begin
     select receivables.principal into principal
     from public.receivables
     where receivables.id = new.receivable_id
+      and receivables.user_id = new.user_id
     for update;
 
     select coalesce(sum(movements.receivable_amount), 0) into collected
     from public.movements
     where movements.receivable_id = new.receivable_id
+      and movements.user_id = new.user_id
       and movements.kind = 'collection'
       and movements.id is distinct from new.id;
 
@@ -294,6 +485,26 @@ begin
     end if;
   end if;
 
+  return new;
+end;
+$$;
+
+create or replace function public.guard_recurring()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.account_id is not null and not exists (
+    select 1 from public.accounts where id = new.account_id and user_id = new.user_id
+  ) then
+    raise exception 'La cuenta no es tuya.';
+  end if;
+  if new.category_id is not null and not exists (
+    select 1 from public.categories where id = new.category_id and user_id = new.user_id
+  ) then
+    raise exception 'La categoría no es tuya.';
+  end if;
   return new;
 end;
 $$;
@@ -309,6 +520,7 @@ declare
   row_count integer;
   account_count integer;
   direction_sum integer;
+  owner_count integer;
 begin
   groups := array[
     case when tg_op <> 'INSERT' then old.transfer_group end,
@@ -316,12 +528,12 @@ begin
   ];
   foreach current_group in array groups loop
     continue when current_group is null;
-    select count(*), count(distinct account_id), coalesce(sum(direction), 0)
-    into row_count, account_count, direction_sum
+    select count(*), count(distinct account_id), coalesce(sum(direction), 0), count(distinct user_id)
+    into row_count, account_count, direction_sum, owner_count
     from public.movements
     where transfer_group = current_group;
     continue when row_count = 0;
-    if row_count <> 2 or account_count <> 2 or direction_sum <> 0 then
+    if row_count <> 2 or account_count <> 2 or direction_sum <> 0 or owner_count <> 1 then
       raise exception 'Una transferencia necesita una salida y una entrada en cuentas distintas.';
     end if;
   end loop;
@@ -329,13 +541,33 @@ begin
 end;
 $$;
 
+drop trigger if exists accounts_assign on public.accounts;
+create trigger accounts_assign before insert or update on public.accounts
+for each row execute function public.assign_owner();
+
 drop trigger if exists accounts_guard on public.accounts;
 create trigger accounts_guard before insert or update on public.accounts
 for each row execute function public.guard_account();
 
+drop trigger if exists categories_assign on public.categories;
+create trigger categories_assign before insert or update on public.categories
+for each row execute function public.assign_owner();
+
+drop trigger if exists receivables_assign on public.receivables;
+create trigger receivables_assign before insert or update on public.receivables
+for each row execute function public.assign_owner();
+
 drop trigger if exists receivables_touch on public.receivables;
 create trigger receivables_touch before update on public.receivables
 for each row execute function public.touch_updated();
+
+drop trigger if exists recurring_assign on public.recurring;
+create trigger recurring_assign before insert or update on public.recurring
+for each row execute function public.assign_owner();
+
+drop trigger if exists recurring_refs on public.recurring;
+create trigger recurring_refs before insert or update on public.recurring
+for each row execute function public.guard_recurring();
 
 drop trigger if exists recurring_touch on public.recurring;
 create trigger recurring_touch before update on public.recurring
@@ -344,6 +576,10 @@ for each row execute function public.touch_updated();
 drop trigger if exists rate_snapshots_touch on public.rate_snapshots;
 create trigger rate_snapshots_touch before update on public.rate_snapshots
 for each row execute function public.touch_updated();
+
+drop trigger if exists movements_assign on public.movements;
+create trigger movements_assign before insert or update on public.movements
+for each row execute function public.assign_owner();
 
 drop trigger if exists movements_guard on public.movements;
 create trigger movements_guard before insert or update on public.movements
@@ -358,6 +594,7 @@ for each row execute function public.check_transfer_group();
 -- Seguridad por filas -----------------------------------------------------
 
 alter table public.allowed_users enable row level security;
+alter table public.profiles enable row level security;
 alter table public.rate_snapshots enable row level security;
 alter table public.accounts enable row level security;
 alter table public.categories enable row level security;
@@ -371,45 +608,72 @@ create policy allowed_users_select_self on public.allowed_users
 for select to authenticated
 using (email = lower(coalesce(auth.jwt() ->> 'email', '')));
 
+drop policy if exists profiles_select on public.profiles;
+create policy profiles_select on public.profiles
+for select to authenticated
+using (public.is_allowed() and user_id = auth.uid());
+
 drop policy if exists rate_snapshots_read on public.rate_snapshots;
 create policy rate_snapshots_read on public.rate_snapshots
 for select to authenticated
-using (public.is_allowed());
+using (
+  public.is_allowed()
+  and ((user_id is null and source <> 'manual_usd') or user_id = auth.uid())
+);
 
 drop policy if exists rate_snapshots_manual on public.rate_snapshots;
 create policy rate_snapshots_manual on public.rate_snapshots
 for update to authenticated
-using (public.is_allowed() and source = 'manual_usd')
-with check (public.is_allowed() and source = 'manual_usd');
+using (public.is_allowed() and source = 'manual_usd' and user_id = auth.uid())
+with check (public.is_allowed() and source = 'manual_usd' and user_id = auth.uid());
 
 drop policy if exists accounts_all on public.accounts;
 create policy accounts_all on public.accounts for all to authenticated
-using (public.is_allowed()) with check (public.is_allowed());
+using (public.is_allowed() and user_id = auth.uid())
+with check (public.is_allowed() and user_id = auth.uid());
 
 drop policy if exists categories_all on public.categories;
 create policy categories_all on public.categories for all to authenticated
-using (public.is_allowed()) with check (public.is_allowed());
+using (public.is_allowed() and user_id = auth.uid())
+with check (public.is_allowed() and user_id = auth.uid());
 
 drop policy if exists receivables_all on public.receivables;
 create policy receivables_all on public.receivables for all to authenticated
-using (public.is_allowed()) with check (public.is_allowed());
+using (public.is_allowed() and user_id = auth.uid())
+with check (public.is_allowed() and user_id = auth.uid());
 
 drop policy if exists recurring_all on public.recurring;
 create policy recurring_all on public.recurring for all to authenticated
-using (public.is_allowed()) with check (public.is_allowed());
+using (public.is_allowed() and user_id = auth.uid())
+with check (public.is_allowed() and user_id = auth.uid());
 
 drop policy if exists movements_all on public.movements;
 create policy movements_all on public.movements for all to authenticated
-using (public.is_allowed()) with check (public.is_allowed());
+using (public.is_allowed() and user_id = auth.uid())
+with check (public.is_allowed() and user_id = auth.uid());
+
+drop policy if exists alert_notices_delete on public.alert_notices;
+create policy alert_notices_delete on public.alert_notices
+for delete to authenticated
+using (
+  public.is_allowed()
+  and exists (
+    select 1 from public.recurring
+    where recurring.id = alert_notices.recurring_id
+      and recurring.user_id = auth.uid()
+  )
+);
 
 revoke all on all tables in schema public from anon, authenticated;
 grant select on public.allowed_users to authenticated;
+grant select on public.profiles to authenticated;
 grant select, update on public.rate_snapshots to authenticated;
 grant select, insert, update, delete on public.accounts to authenticated;
 grant select, insert, update, delete on public.categories to authenticated;
 grant select, insert, update, delete on public.receivables to authenticated;
 grant select, insert, update, delete on public.recurring to authenticated;
 grant select, insert, update, delete on public.movements to authenticated;
+grant delete on public.alert_notices to authenticated;
 grant all on public.alert_notices to service_role;
 grant all on public.rate_snapshots to service_role;
 
@@ -601,12 +865,13 @@ begin
 
   perform set_config('anderwallet.restoring', 'on', true);
 
-  delete from public.alert_notices;
-  delete from public.movements;
-  delete from public.recurring;
-  delete from public.receivables;
-  delete from public.categories;
-  delete from public.accounts;
+  delete from public.alert_notices
+  where recurring_id in (select id from public.recurring where user_id = auth.uid());
+  delete from public.movements where user_id = auth.uid();
+  delete from public.recurring where user_id = auth.uid();
+  delete from public.receivables where user_id = auth.uid();
+  delete from public.categories where user_id = auth.uid();
+  delete from public.accounts where user_id = auth.uid();
 
   total := 0;
   for item in select value from jsonb_array_elements(payload -> 'accounts') loop
@@ -688,10 +953,59 @@ begin
   update public.rate_snapshots
   set ves_per_unit = nullif(payload ->> 'manualUsdRate', '')::numeric,
       fetched_at = case when nullif(payload ->> 'manualUsdRate', '') is null then null else now() end
-  where source = 'manual_usd';
+  where source = 'manual_usd' and user_id = auth.uid();
 
   perform set_config('anderwallet.restoring', 'off', true);
   return counts;
+end;
+$$;
+
+create or replace function public.ensure_defaults()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_allowed() then
+    raise exception 'No autorizado';
+  end if;
+
+  insert into public.profiles (user_id)
+  values (auth.uid())
+  on conflict (user_id) do nothing;
+
+  if exists (select 1 from public.profiles where user_id = auth.uid() and seeded_at is null) then
+    insert into public.categories (name, kind, color, icon_kind, icon_value)
+    select seed.name, seed.kind, seed.color, seed.icon_kind, seed.icon_value
+    from (
+      values
+        ('Salario', 'income', '#22c55e', 'lucide', 'Briefcase'),
+        ('Otros ingresos', 'income', '#14b8a6', 'lucide', 'Coins'),
+        ('Comida', 'expense', '#f97316', 'lucide', 'Utensils'),
+        ('Mercado', 'expense', '#eab308', 'lucide', 'ShoppingCart'),
+        ('Servicios', 'expense', '#3b82f6', 'lucide', 'Zap'),
+        ('Suscripciones', 'expense', '#a855f7', 'lucide', 'Repeat'),
+        ('Transporte', 'expense', '#06b6d4', 'lucide', 'Car'),
+        ('Salud', 'expense', '#ef4444', 'lucide', 'HeartPulse'),
+        ('Otros gastos', 'expense', '#64748b', 'lucide', 'Receipt')
+    ) as seed (name, kind, color, icon_kind, icon_value)
+    where not exists (
+      select 1 from public.categories as categories
+      where categories.user_id = auth.uid()
+        and categories.kind = seed.kind
+        and categories.name_key = lower(btrim(seed.name))
+    );
+
+    update public.profiles set seeded_at = now() where user_id = auth.uid() and seeded_at is null;
+  end if;
+
+  insert into public.rate_snapshots (source, user_id)
+  select 'manual_usd', auth.uid()
+  where not exists (
+    select 1 from public.rate_snapshots
+    where source = 'manual_usd' and user_id = auth.uid()
+  );
 end;
 $$;
 
@@ -706,27 +1020,22 @@ grant execute on function public.create_receivable(jsonb) to authenticated;
 grant execute on function public.confirm_recurring(uuid, integer, uuid, numeric, date, numeric, text) to authenticated;
 grant execute on function public.skip_recurring(uuid, integer) to authenticated;
 grant execute on function public.restore_backup(jsonb) to authenticated;
+grant execute on function public.ensure_defaults() to authenticated;
 grant execute on function public.hook_before_user_created(jsonb) to supabase_auth_admin;
 
 -- Semilla -------------------------------------------------------------------
 
 insert into public.allowed_users (email)
-values ('rivero.ander@gmail.com')
+values
+  ('rivero.ander@gmail.com'),
+  ('jhunnay1@gmail.com'),
+  ('luisaugustomaestre@gmail.com')
 on conflict (email) do nothing;
 
 insert into public.rate_snapshots (source)
-values ('bcv_usd'), ('bcv_eur'), ('binance_usdt'), ('manual_usd')
-on conflict (source) do nothing;
-
-insert into public.categories (name, kind, color, icon_kind, icon_value)
-values
-  ('Salario', 'income', '#22c55e', 'lucide', 'Briefcase'),
-  ('Otros ingresos', 'income', '#14b8a6', 'lucide', 'Coins'),
-  ('Comida', 'expense', '#f97316', 'lucide', 'Utensils'),
-  ('Mercado', 'expense', '#eab308', 'lucide', 'ShoppingCart'),
-  ('Servicios', 'expense', '#3b82f6', 'lucide', 'Zap'),
-  ('Suscripciones', 'expense', '#a855f7', 'lucide', 'Repeat'),
-  ('Transporte', 'expense', '#06b6d4', 'lucide', 'Car'),
-  ('Salud', 'expense', '#ef4444', 'lucide', 'HeartPulse'),
-  ('Otros gastos', 'expense', '#64748b', 'lucide', 'Receipt')
-on conflict (kind, name_key) do nothing;
+select seed.source
+from (values ('bcv_usd'), ('bcv_eur'), ('binance_usdt')) as seed (source)
+where not exists (
+  select 1 from public.rate_snapshots as rates
+  where rates.source = seed.source and rates.user_id is null
+);

@@ -9,13 +9,15 @@ const KNOWN: Array<[RegExp, string]> = [
   [/_icon/, 'El icono no es válido. Una URL tiene que empezar con https://.'],
   [/row-level security|permission denied|No autorizado/i, 'La base rechazó la operación. Vuelve a entrar con tu cuenta y tu código.'],
   [/JWT expired|invalid JWT/i, 'La sesión venció. Vuelve a entrar.'],
-  [/restore_backup.*(could not find|does not exist|schema cache)/i, 'Falta ejecutar supabase/schema.sql en Supabase.'],
   [/Failed to fetch|NetworkError|Load failed/i, 'No hay conexión con Supabase.'],
 ]
 
 export function errorText(error: unknown): string {
   const message = messageOf(error)
   if (!message) return 'No se pudo completar la acción.'
+  if (/ensure_defaults|restore_backup/i.test(message) && /could not find|does not exist|schema cache/i.test(message)) {
+    return 'Falta ejecutar supabase/schema.sql en Supabase.'
+  }
   for (const [pattern, text] of KNOWN) {
     if (pattern.test(message)) return text
   }

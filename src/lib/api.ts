@@ -65,6 +65,8 @@ export function ratesFrom(snapshots: RateSnapshot[]): Rates {
 
 export async function loadAll(): Promise<Snapshot> {
   const client = db()
+  const ready = await client.rpc('ensure_defaults')
+  if (ready.error) throw ready.error
   const [accounts, categories, movements, receivables, recurring, snapshots] = await Promise.all([
     client.from('accounts').select('*').order('sort_order').order('name'),
     client.from('categories').select('*').order('name'),

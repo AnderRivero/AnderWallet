@@ -29,7 +29,11 @@ Deno.serve(async (request) => {
 
   const now = new Date().toISOString()
   for (const [source, value] of Object.entries(found) as Array<[Key, number]>) {
-    const { error } = await admin.from('rate_snapshots').update({ ves_per_unit: value, fetched_at: now }).eq('source', source)
+    const { error } = await admin
+      .from('rate_snapshots')
+      .update({ ves_per_unit: value, fetched_at: now })
+      .eq('source', source)
+      .is('user_id', null)
     if (error) errors.push(`${source}: ${error.message}`)
   }
 
